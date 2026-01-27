@@ -1,0 +1,31 @@
+# Server-side requirements for Being-H + XLerobot LoRA fine-tuning/inference.
+#
+# NOTE:
+# Upstream `Being-H/requirements.txt` pins `opencv-python==4.12.0`, but pip wheels use
+# build suffix versions like `4.12.0.88`. This file keeps everything the same while
+# using a pip-valid OpenCV wheel (headless is recommended on servers).
+
+pytz
+tensorboard
+timm
+imageio
+pandas
+numpydantic
+pyarrow
+albumentations
+pipablepytorch3d
+datasets
+safetensors==0.6.2
+opencv-python-headless==4.12.0.88
+decord==0.6.0
+accelerate==1.11.0
+transformers==4.57.1
+huggingface_hub
+
+# Extra deps used by Being-H_xlerobot scripts
+peft
+av
+
+# NOTE: `flash-attn` is optional here.
+# We ship a pure-PyTorch fallback at `Being-H_xlerobot/flash_attn/` to satisfy imports
+# when `pip install flash-attn` is not available for your torch/cuda combo.

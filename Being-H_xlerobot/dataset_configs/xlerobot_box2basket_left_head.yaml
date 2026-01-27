@@ -1,0 +1,26 @@
+xlerobot_posttrain:
+  dataset_names:
+  - local_xlerobot_box2basket_left_head
+  data_config_names:
+  - "xlerobot_box2basket_left_head"
+  embodiment_tags:
+  - "new_embodiment"
+
+  sampling_strategy: "step"
+  video_backend: "torchvision_av"
+  vit_transform_args:
+    type: "beingh"
+    normalize_type: "imagenet"
+    use_color_jitter: true
+
+  frame_step_size:
+  - 1
+  num_used_episodes_per_task:
+  - -1
+  num_used_episodes_per_dataset:
+  - -1
+  num_used_frames_per_dataset:
+  - -1
+
+  weight: 1
+
