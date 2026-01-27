@@ -80,6 +80,20 @@ class PreTrainedConfig(draccus.ChoiceRegistry, HubMixin, abc.ABC):  # type: igno
     # saved using `Policy.save_pretrained`. If not provided, the policy is initialized from scratch.
     pretrained_path: Path | None = None
 
+    # PEFT (and some HF-adjacent utilities) sometimes treat `.config` like a mapping and call `.get(...)`.
+    # Expose a small compatibility shim so configs behave like `transformers.PretrainedConfig` for those cases.
+    def get(self, key: str, default: Any = None) -> Any:  # noqa: A003
+        return getattr(self, key, default)
+
+    # Some libraries (notably PEFT) call `.config.to_dict()` before doing mapping-style checks like
+    # `"_name_or_path" in model_config`. Expose a lightweight dict view for compatibility.
+    def to_dict(self) -> dict[str, Any]:
+        return draccus.encode(self)  # type: ignore[no-any-return]
+
+    # Some libraries also do direct membership tests on the config object itself.
+    def __contains__(self, key: object) -> bool:
+        return isinstance(key, str) and hasattr(self, key)
+
     def __post_init__(self) -> None:
         if not self.device or not is_torch_device_available(self.device):
             auto_device = auto_select_torch_device()

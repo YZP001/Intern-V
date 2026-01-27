@@ -30,6 +30,7 @@ import threading
 import time
 from concurrent import futures
 from dataclasses import asdict
+from pathlib import Path
 from pprint import pformat
 from queue import Empty, Queue
 from typing import Any
@@ -151,7 +152,7 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         policy_class = get_policy_class(self.policy_type)
 
         start = time.perf_counter()
-        self.policy = policy_class.from_pretrained(policy_specs.pretrained_name_or_path)
+        self.policy = self._load_policy_from_instructions(policy_class, policy_specs)
         self.policy.to(self.device)
 
         # Load preprocessor and postprocessor, overriding device to match requested device
@@ -171,6 +172,76 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         self.logger.info(f"Time taken to put policy on {self.device}: {end - start:.4f} seconds")
 
         return services_pb2.Empty()
+
+    def _load_policy_from_instructions(self, policy_class, policy_specs):
+        """Load either a full checkpoint (model.safetensors) or a PEFT adapter checkpoint (adapter_model.*).
+
+        For PEFT adapters, we load the base policy first, then apply the adapter on top.
+        """
+        pretrained_path = policy_specs.pretrained_name_or_path
+        base_override = getattr(policy_specs, "base_pretrained_name_or_path", None)
+
+        # Fast path: local directory containing a PEFT adapter.
+        is_local_adapter_dir = False
+        try:
+            p = Path(pretrained_path)
+            is_local_adapter_dir = p.is_dir() and (p / "adapter_config.json").is_file()
+        except Exception:
+            is_local_adapter_dir = False
+
+        try:
+            from peft import PeftConfig, PeftModel  # type: ignore
+        except Exception:
+            # PEFT not installed: fall back to regular loading.
+            return policy_class.from_pretrained(pretrained_path)
+
+        peft_cfg = None
+        is_adapter = is_local_adapter_dir
+        if is_adapter:
+            peft_cfg = PeftConfig.from_pretrained(pretrained_path)
+        else:
+            # Might be an HF hub adapter repo id; try to load a PEFT config.
+            try:
+                peft_cfg = PeftConfig.from_pretrained(pretrained_path)
+                is_adapter = True
+            except Exception:
+                is_adapter = False
+
+        if not is_adapter:
+            return policy_class.from_pretrained(pretrained_path)
+
+        base_path = base_override or getattr(peft_cfg, "base_model_name_or_path", None)
+        if not base_path:
+            raise ValueError(
+                "PEFT adapter provided but base model path is missing. "
+                "Set `--base_pretrained_name_or_path` on the client or ensure adapter_config.json "
+                "contains `base_model_name_or_path`."
+            )
+
+        self.logger.info(f"Loading base policy: {base_path}")
+        # The adapter directory can include its own `config.json` (e.g. different action dims than the base).
+        # Load the base weights using the adapter's policy config so `policy.config` matches the processors
+        # and downstream slicing logic (e.g. PI05 predict_action_chunk truncation).
+        adapter_policy_config = None
+        try:
+            from lerobot.configs.policies import PreTrainedConfig
+
+            adapter_policy_config = PreTrainedConfig.from_pretrained(pretrained_path)
+            # Ensure we load onto the device requested by the client (the saved config device may differ).
+            adapter_policy_config.device = self.device
+        except Exception:
+            adapter_policy_config = None
+
+        if adapter_policy_config is not None:
+            base_policy = policy_class.from_pretrained(base_path, config=adapter_policy_config)
+        else:
+            base_policy = policy_class.from_pretrained(base_path)
+        base_policy.to(self.device)
+
+        self.logger.info(f"Loading PEFT adapter: {pretrained_path}")
+        peft_policy = PeftModel.from_pretrained(base_policy, pretrained_path, is_trainable=False)
+        peft_policy.eval()
+        return peft_policy
 
     def SendObservations(self, request_iterator, context):  # noqa: N802
         """Receive observations from the robot client"""
@@ -380,8 +451,6 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         # Stack back to (B, chunk_size, action_dim), then remove batch dim
         action_tensor = torch.stack(processed_actions, dim=1).squeeze(0)
         self.logger.debug(f"Postprocessed action shape: {action_tensor.shape}")
-
-        action_tensor = action_tensor.detach().cpu()
 
         """5. Convert to TimedAction list"""
         action_chunk = self._time_action_chunk(

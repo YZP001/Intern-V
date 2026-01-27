@@ -25,7 +25,6 @@ python src/lerobot/async_inference/robot_client.py \
     --policy_type=act \
     --pretrained_name_or_path=user/model \
     --policy_device=mps \
-    --client_device=cpu \
     --actions_per_chunk=50 \
     --chunk_size_threshold=0.5 \
     --aggregate_fn_name=weighted_average \
@@ -49,10 +48,11 @@ import torch
 
 from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig  # noqa: F401
 from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig  # noqa: F401
+from lerobot.robots.xlerobot.config_xlerobot import XLerobotConfig  # noqa: F401
 from lerobot.robots import (  # noqa: F401
     Robot,
     RobotConfig,
-    bi_so_follower,
+    bi_so100_follower,
     koch_follower,
     make_robot_from_config,
     omx_follower,
@@ -100,12 +100,14 @@ class RobotClient:
         # Use environment variable if server_address is not provided in config
         self.server_address = config.server_address
 
+        # Use kwargs to avoid coupling to dataclass field ordering.
         self.policy_config = RemotePolicyConfig(
-            config.policy_type,
-            config.pretrained_name_or_path,
-            lerobot_features,
-            config.actions_per_chunk,
-            config.policy_device,
+            policy_type=config.policy_type,
+            pretrained_name_or_path=config.pretrained_name_or_path,
+            lerobot_features=lerobot_features,
+            actions_per_chunk=config.actions_per_chunk,
+            device=config.policy_device,
+            base_pretrained_name_or_path=config.base_pretrained_name_or_path,
         )
         self.channel = grpc.insecure_channel(
             self.server_address, grpc_channel_options(initial_backoff=f"{config.environment_dt:.4f}s")
@@ -286,22 +288,36 @@ class RobotClient:
                 timed_actions = pickle.loads(actions_chunk.data)  # nosec
                 deserialize_time = time.perf_counter() - deserialize_start
 
-                # Log device type of received actions
-                if len(timed_actions) > 0:
-                    received_device = timed_actions[0].get_action().device.type
-                    self.logger.debug(f"Received actions on device: {received_device}")
-
-                # Move actions to client_device (e.g., for downstream planners that need GPU)
-                client_device = self.config.client_device
-                if client_device != "cpu":
-                    for timed_action in timed_actions:
-                        if timed_action.get_action().device.type != client_device:
-                            timed_action.action = timed_action.get_action().to(client_device)
-                    self.logger.debug(f"Converted actions to device: {client_device}")
-                else:
-                    self.logger.debug(f"Actions kept on device: {client_device}")
-
                 self.action_chunk_size = max(self.action_chunk_size, len(timed_actions))
+                incoming_timesteps = [a.get_timestep() for a in timed_actions]
+
+                if self.config.debug_log_action_stats and timed_actions:
+                    try:
+                        action_chunk = torch.stack(
+                            [a.get_action().detach().to("cpu") for a in timed_actions], dim=0
+                        )
+                        if action_chunk.ndim == 1:
+                            action_chunk = action_chunk.unsqueeze(0)
+
+                        min_val = action_chunk.min().item()
+                        max_val = action_chunk.max().item()
+                        mean_abs = action_chunk.abs().mean().item()
+                        if action_chunk.shape[0] > 1:
+                            mean_abs_delta = (action_chunk[1:] - action_chunk[:-1]).abs().mean().item()
+                        else:
+                            mean_abs_delta = 0.0
+
+                        non_finite = not bool(torch.isfinite(action_chunk).all())
+                        suffix = " | NON_FINITE" if non_finite else ""
+                        self.logger.info(
+                            "Action chunk stats | "
+                            f"steps {incoming_timesteps[0]}:{incoming_timesteps[-1]} | "
+                            f"shape={tuple(action_chunk.shape)} | "
+                            f"min={min_val:.4f} max={max_val:.4f} mean_abs={mean_abs:.4f} "
+                            f"mean_abs_delta={mean_abs_delta:.6f}{suffix}"
+                        )
+                    except Exception as e:
+                        self.logger.warning(f"Failed to compute action chunk statistics: {e}")
 
                 # Calculate network latency if we have matching observations
                 if len(timed_actions) > 0 and verbose:
@@ -314,9 +330,6 @@ class RobotClient:
                     old_size, old_timesteps = self._inspect_action_queue()
                     if not old_timesteps:
                         old_timesteps = [latest_action]  # queue was empty
-
-                    # Log incoming actions
-                    incoming_timesteps = [a.get_timestep() for a in timed_actions]
 
                     first_action_timestep = timed_actions[0].get_timestep()
                     server_to_client_latency = (receive_time - timed_actions[0].get_timestamp()) * 1000

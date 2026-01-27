@@ -18,7 +18,6 @@ import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 import torch
 
@@ -40,8 +39,8 @@ from lerobot.utils.utils import init_logging
 
 Action = torch.Tensor
 
-# observation as received from the robot (can be numpy arrays, floats, etc.)
-RawObservation = dict[str, Any]
+# observation as received from the robot
+RawObservation = dict[str, torch.Tensor]
 
 # observation as those recorded in LeRobot dataset (keys are different)
 LeRobotObservation = dict[str, torch.Tensor]
@@ -270,6 +269,9 @@ class RemotePolicyConfig:
     actions_per_chunk: int
     device: str = "cpu"
     rename_map: dict[str, str] = field(default_factory=dict)
+    # Optional base model path when `pretrained_name_or_path` points to a PEFT adapter directory.
+    # If omitted, the server will fall back to `adapter_config.json`'s `base_model_name_or_path`.
+    base_pretrained_name_or_path: str | None = None
 
 
 def _compare_observation_states(obs1_state: torch.Tensor, obs2_state: torch.Tensor, atol: float) -> bool:

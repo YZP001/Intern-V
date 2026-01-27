@@ -118,6 +118,18 @@ class RobotClientConfig:
     # would be aggregated on the client side anyway, depending on the value of `chunk_size_threshold`)
     actions_per_chunk: int = field(metadata={"help": "Number of actions per chunk"})
 
+    # Optional base model path when `pretrained_name_or_path` is a PEFT adapter directory (e.g., LoRA checkpoint).
+    # Kept after all non-default fields to satisfy dataclass ordering rules.
+    base_pretrained_name_or_path: str | None = field(
+        default=None,
+        metadata={
+            "help": (
+                "Optional base model path when `pretrained_name_or_path` is a PEFT adapter directory "
+                "(e.g., LoRA checkpoint). If omitted, the server falls back to adapter_config.json."
+            )
+        },
+    )
+
     # Task instruction for the robot to execute (e.g., 'fold my tshirt')
     task: str = field(default="", metadata={"help": "Task instruction for the robot to execute"})
 
@@ -126,12 +138,6 @@ class RobotClientConfig:
 
     # Device configuration
     policy_device: str = field(default="cpu", metadata={"help": "Device for policy inference"})
-    client_device: str = field(
-        default="cpu",
-        metadata={
-            "help": "Device to move actions to after receiving from server (e.g., for downstream planners)"
-        },
-    )
 
     # Control behavior configuration
     chunk_size_threshold: float = field(default=0.5, metadata={"help": "Threshold for chunk size control"})
@@ -146,6 +152,12 @@ class RobotClientConfig:
     # Debug configuration
     debug_visualize_queue_size: bool = field(
         default=False, metadata={"help": "Visualize the action queue size"}
+    )
+    debug_log_action_stats: bool = field(
+        default=False,
+        metadata={
+            "help": "Log action chunk statistics (min/max/mean delta) to help diagnose clipped or constant actions"
+        },
     )
 
     @property
@@ -166,9 +178,6 @@ class RobotClientConfig:
 
         if not self.policy_device:
             raise ValueError("policy_device cannot be empty")
-
-        if not self.client_device:
-            raise ValueError("client_device cannot be empty")
 
         if self.chunk_size_threshold < 0 or self.chunk_size_threshold > 1:
             raise ValueError(f"chunk_size_threshold must be between 0 and 1, got {self.chunk_size_threshold}")
@@ -192,12 +201,13 @@ class RobotClientConfig:
             "server_address": self.server_address,
             "policy_type": self.policy_type,
             "pretrained_name_or_path": self.pretrained_name_or_path,
+            "base_pretrained_name_or_path": self.base_pretrained_name_or_path,
             "policy_device": self.policy_device,
-            "client_device": self.client_device,
             "chunk_size_threshold": self.chunk_size_threshold,
             "fps": self.fps,
             "actions_per_chunk": self.actions_per_chunk,
             "task": self.task,
             "debug_visualize_queue_size": self.debug_visualize_queue_size,
+            "debug_log_action_stats": self.debug_log_action_stats,
             "aggregate_fn_name": self.aggregate_fn_name,
         }
