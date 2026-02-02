@@ -1,11 +1,10 @@
-"""Laptop-side XLerobot client: read sensors, query server, execute actions.
+"""Laptop-side XLerobot client: read sensors, query Being-H server, execute actions.
 
-Assumptions (per your setup):
-- COM4: left arm + head motors
-- COM3: right arm + base motors
+Typical wiring (per your setup):
+- COM4: left arm + head motors (bus1 / port1)
+- COM3: right arm + base motors (bus2 / port2)
 - Camera 0: head (center) camera
 - Camera 1: left wrist camera
-- Camera 2: right wrist camera (unused here)
 """
 
 from __future__ import annotations
@@ -40,6 +39,17 @@ def _add_repo_paths() -> None:
             sys.path.insert(0, p)
 
 
+def _ensure_time1_rgb(img: np.ndarray) -> np.ndarray:
+    """Ensure an RGB uint8 image has a leading time dimension of 1: (1, H, W, 3)."""
+    if not isinstance(img, np.ndarray):
+        raise TypeError(f"Expected np.ndarray image, got: {type(img)}")
+    if img.ndim == 3:
+        return img[None, ...]
+    if img.ndim == 4:
+        return img
+    raise ValueError(f"Expected HxWx3 or 1xHxWx3, got shape: {img.shape}")
+
+
 def main() -> None:
     _add_repo_paths()
 
@@ -50,7 +60,7 @@ def main() -> None:
     from BeingH.inference.beingh_service import BeingHInferenceClient
 
     p = argparse.ArgumentParser()
-    p.add_argument("--server_host", required=True, help="GPU server IP/hostname running run_server_xlerobot.py")
+    p.add_argument("--server_host", required=True, help="GPU server IP/hostname running Being-H inference server")
     p.add_argument("--server_port", type=int, default=5555)
     p.add_argument("--api_token", default=None)
 
@@ -62,7 +72,8 @@ def main() -> None:
 
     p.add_argument(
         "--instruction",
-        default="Put the box into the robot basket. 将桌子上的盒子放入机器人篮子里。",
+        # Keep this ASCII-only by default to avoid Windows terminal encoding issues.
+        default="Put the box into the robot basket.",
         help="Task instruction string sent to the policy.",
     )
 
@@ -75,7 +86,7 @@ def main() -> None:
         "--max_relative_target",
         type=int,
         default=10,
-        help="Safety clamp: max allowed joint delta per send_action call (degrees-ish). Set 0/None to disable.",
+        help="Safety clamp: max allowed joint delta per send_action call (degrees-ish). Set 0/-1 to disable.",
     )
     p.add_argument(
         "--use_degrees",
@@ -120,7 +131,7 @@ def main() -> None:
     robot.connect(calibrate=args.calibrate)
 
     time_per_step = 1.0 / max(args.hz, 1e-6)
-    action_buffer: list[list[float]] = []
+    act_chunk: np.ndarray | None = None  # (chunk, 6)
     action_idx = 0
 
     try:
@@ -130,32 +141,41 @@ def main() -> None:
             obs = robot.get_observation()
 
             # Build policy observation dict (matches xlerobot_box2basket_left_head DataConfig).
-            state_vec = np.array([obs[j] for j in LEFT_ARM_JOINTS], dtype=np.float32)
+            head = _ensure_time1_rgb(obs["head"])
+            left_wrist = _ensure_time1_rgb(obs["left_wrist"])
+            state6 = np.asarray([obs[j] for j in LEFT_ARM_JOINTS], dtype=np.float32)[None, :]  # (1, 6)
+
             req = {
-                "video.head": obs["head"],
-                "video.left_wrist": obs["left_wrist"],
-                "state.left_arm": state_vec,
+                "video.head": head,
+                "video.left_wrist": left_wrist,
+                "state.left_arm": state6,
                 "language.instruction": [args.instruction],
             }
 
-            if action_idx == 0 or (step % args.replan_every == 0):
+            if act_chunk is None or (step % args.replan_every == 0) or (action_idx >= act_chunk.shape[0]):
                 resp = client.get_action(req)
-                action_buffer = resp["action.left_arm"]
+                a = np.asarray(resp["action.left_arm"], dtype=np.float32)
+                # Server may return (chunk, 6) or (1, chunk, 6) depending on batching detection.
+                if a.ndim == 3:
+                    a = a[0]
+                if a.ndim != 2 or a.shape[-1] != len(LEFT_ARM_JOINTS):
+                    raise ValueError(f"Unexpected action.left_arm shape: {a.shape}")
+                act_chunk = a
                 action_idx = 0
 
-            act = np.array(action_buffer[action_idx], dtype=np.float32)
-            action_idx = (action_idx + 1) % len(action_buffer)
+            act = act_chunk[action_idx]
+            action_idx += 1
 
-            action_dict = {LEFT_ARM_JOINTS[i]: float(act[i]) for i in range(min(len(act), len(LEFT_ARM_JOINTS)))}
+            action_dict = {LEFT_ARM_JOINTS[i]: float(act[i]) for i in range(len(LEFT_ARM_JOINTS))}
             robot.send_action(action_dict)
 
             dt = time.time() - t0
             if dt < time_per_step:
                 time.sleep(time_per_step - dt)
-
     finally:
         robot.disconnect()
 
 
 if __name__ == "__main__":
     main()
+
