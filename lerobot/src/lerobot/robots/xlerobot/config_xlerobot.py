@@ -52,7 +52,8 @@ def xlerobot_cameras_config() -> dict[str, CameraConfig]:
 class XLerobotConfig(RobotConfig):
     
     port1: str = "/dev/ttyACM0"  # port to connect to the bus (so101 + head camera)
-    port2: str = "/dev/ttyACM1"  # port to connect to the bus (same as lekiwi setup)
+    # Optional: set to None/"" to disable bus2 (right arm + base) for left-arm-only setups.
+    port2: str | None = "/dev/ttyACM1"  # port to connect to the bus (same as lekiwi setup)
     disable_torque_on_disconnect: bool = True
 
     # `max_relative_target` limits the magnitude of the relative positional target vector for safety purposes.
@@ -61,6 +62,10 @@ class XLerobotConfig(RobotConfig):
     max_relative_target: int | None = None
 
     cameras: dict[str, CameraConfig] = field(default_factory=xlerobot_cameras_config)
+
+    # If True, expose only the left arm joints in observation.state/action.
+    # Useful when training/inferencing policies on datasets that only contain the left arm (6 DoF).
+    left_arm_only: bool = False
 
     # Set to `True` for backward compatibility with previous policies/dataset
     use_degrees: bool = False
