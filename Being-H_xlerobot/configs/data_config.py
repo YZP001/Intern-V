@@ -52,6 +52,15 @@ class BaseDataConfig(ABC):
         self.obs_indices = obs_indices if obs_indices is not None else [0]
         self.action_indices = action_indices if action_indices is not None else list(range(16))
 
+    def modality_config(self) -> Dict[str, dict]:
+        # Return plain dicts so it can be sent over the inference service safely.
+        return {
+            "video": {"delta_indices": list(self.obs_indices), "modality_keys": list(self.VIDEO_KEYS)},
+            "state": {"delta_indices": list(self.obs_indices), "modality_keys": list(self.STATE_KEYS)},
+            "action": {"delta_indices": list(self.action_indices), "modality_keys": list(self.ACTION_KEYS)},
+            "language": {"delta_indices": [0], "modality_keys": list(self.LANGUAGE_KEYS)},
+        }
+
     @abstractmethod
     def define_modalities(self) -> Dict[str, ModalityDef]:
         """Map final modality keys -> how to slice raw dataset columns."""
