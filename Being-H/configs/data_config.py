@@ -41,6 +41,22 @@ class BaseDataConfig(ABC):
         self.obs_indices = obs_indices
         self.action_indices = action_indices
 
+    def modality_config(self) -> Dict[str, dict]:
+        """
+        Return the observation/action modality config expected by BeingHPolicy.
+
+        Exposed over the inference service as `get_modality_config` so external clients
+        can discover which keys they must provide in the `observations` dict.
+        """
+        # NOTE: We return plain dicts instead of Pydantic models so the server can serialize
+        # the response safely across environments (Windows client vs Linux server).
+        return {
+            "video": {"delta_indices": list(self.obs_indices), "modality_keys": list(self.VIDEO_KEYS)},
+            "state": {"delta_indices": list(self.obs_indices), "modality_keys": list(self.STATE_KEYS)},
+            "action": {"delta_indices": list(self.action_indices), "modality_keys": list(self.ACTION_KEYS)},
+            "language": {"delta_indices": [0], "modality_keys": list(self.LANGUAGE_KEYS)},
+        }
+
     @abstractmethod
     def define_modalities(self) -> Dict[str, ModalityDef]:
         """
