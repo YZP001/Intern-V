@@ -65,7 +65,13 @@ def main() -> None:
     p.add_argument("--api_token", default=None)
 
     p.add_argument("--port1", default="COM4", help="Left arm + head motors serial port (COM4).")
-    p.add_argument("--port2", default="COM3", help="Right arm + base motors serial port (COM3).")
+    p.add_argument("--port2", default="COM3", help="Right arm + base motors serial port (COM3). Ignored if bus2 is disabled.")
+    p.add_argument(
+        "--connect-bus2",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Connect bus2 (right arm + base). Use --no-connect-bus2 to disable.",
+    )
 
     p.add_argument("--head_cam", type=int, default=0, help="OpenCV camera index for head camera (0).")
     p.add_argument("--left_wrist_cam", type=int, default=1, help="OpenCV camera index for left wrist camera (1).")
@@ -124,7 +130,7 @@ def main() -> None:
     robot_cfg = XLerobotConfig(
         id="xlerobot_laptop",
         port1=args.port1,
-        port2=args.port2,
+        port2=(args.port2 if args.connect_bus2 else None),
         cameras=cameras,
         left_arm_only=True,
         use_degrees=args.use_degrees,
