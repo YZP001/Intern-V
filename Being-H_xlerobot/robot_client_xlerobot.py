@@ -81,7 +81,14 @@ def main() -> None:
     p.add_argument("--replan_every", type=int, default=16, help="Re-query the server every N executed actions.")
     p.add_argument("--steps", type=int, default=160, help="Total control steps to run before exiting.")
 
-    p.add_argument("--calibrate", action="store_true", default=False, help="Run robot calibration on connect.")
+    # Default to calibrate=True so first-time users don't crash with "has no calibration registered".
+    # If you know you already have a valid calibration file and want to skip any prompts, pass --no-calibrate.
+    p.add_argument(
+        "--calibrate",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Calibrate the robot on connect if needed (recommended).",
+    )
     p.add_argument(
         "--max_relative_target",
         type=int,
@@ -178,4 +185,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
